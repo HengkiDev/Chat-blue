@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Publik P2P</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f4f4f4; }
+        #container { max-width: 600px; margin: auto; padding: 20px; background: white; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        textarea, input { width: 100%; margin-bottom: 10px; padding: 8px; box-sizing: border-box; }
+        button { padding: 10px 15px; background: #007bff; color: white; border: none; cursor: pointer; }
+        button:disabled { background: #ccc; }
+        #output { white-space: pre-wrap; background: #eee; padding: 10px; height: 300px; overflow-y: auto; border: 1px solid #ddd; }
+        #status { font-weight: bold; color: #333; }
+        #users { margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <p id="status">Status: Menunggu koneksi...</p>
+        <div id="users">Pengguna terhubung: 0</div>
+        <button id="startBtn" onclick="startChat()">Mulai Chat (Buat Offer)</button>
+        <textarea id="offer" placeholder="Paste offer dari teman di sini, lalu tekan Enter"></textarea>
+        <textarea id="answer" placeholder="Paste answer dari teman di sini, lalu tekan Enter"></textarea>
+        <input id="chat" placeholder="Ketik nama Anda" onfocus="this.placeholder='Ketik pesan di sini, tekan Enter untuk kirim'">
+        <div id="output">Riwayat Chat:</div>
+    </div>
+
+    <script>
+        const output = document.getElementById('output');
+        const status = document.getElementById('status');
+        const users = document.getElementById('users');
+        const chatInput = document.getElementById('chat');
+        const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+        let peers = [];
+        let username = '';
+        let connectedPeers = 0;
+
+        const log = msg => output.innerHTML += `\n${msg}`;
+        const updateStatus = () => {
+            status.innerHTML = `Status: ${connectedPeers > 0 ? 'Terhubung' : 'Menunggu koneksi...'}`;
+            users.innerHTML = `Pengguna terhubung: ${connectedPeers}`;
+        };
+
+        function createPeer() {
+            const pc = new RTCPeerConnection(config);
+            const dc = pc.createDataChannel("chat", { negotiated: true, id: 0 });
+            dc.onopen = () => {
+                connectedPeers++;
+                updateStatus();
+                log('Terhubung ke pengguna baru!');
+                chatInput.focus();
+            };
+            dc.onmessage = e => log(`${e.data}`);
+            dc.onclose = () => {
+                connectedPeers--;
+                updateStatus();
+            };
+            pc.oniceconnectionstatechange = updateStatus;
+            return { pc, dc };
+        }
+
+        async function startChat() {
+            if (!username) {
+                username = chatInput.value.trim();
+                if (!username) {
+                    alert('Masukkan nama Anda di kolom pesan terlebih dahulu!');
+                    return;
+                }
+                chatInput.value = '';
+                chatInput.placeholder = 'Ketik pesan di sini, tekan Enter untuk kirim';
+            }
+            const peer = createPeer();
+            peers.push(peer);
+            document.getElementById('startBtn').disabled = true;
+            await peer.pc.setLocalDescription(await peer.pc.createOffer());
+            peer.pc.onicecandidate = ({ candidate }) => {
+                if (candidate) return;
+                document.getElementById('offer').value = JSON.stringify({
+                    sdp: peer.pc.localDescription.sdp,
+                    id: peers.length - 1
+                });
+                document.getElementById('offer').select();
+            };
+        }
+
+        document.getElementById('offer').onkeypress = async function(e) {
+            if (e.keyCode !== 13) return;
+            if (!username) {
+                username = chatInput.value.trim();
+                if (!username) {
+                    alert('Masukkan nama Anda di kolom pesan terlebih dahulu!');
+                    return;
+                }
+                chatInput.value = '';
+                chatInput.placeholder = 'Ketik pesan di sini, tekan Enter untuk kirim';
+            }
+            const data = JSON.parse(this.value);
+            const peer = createPeer();
+            peers.push(peer);
+            document.getElementById('startBtn').disabled = this.disabled = true;
+            await peer.pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
+            await peer.pc.setLocalDescription(await peer.pc.createAnswer());
+            peer.pc.onicecandidate = ({ candidate }) => {
+                if (candidate) return;
+                document.getElementById('answer').value = JSON.stringify({
+                    sdp: peer.pc.localDescription.sdp,
+                    id: peers.length - 1
+                });
+                document.getElementById('answer').select();
+            };
+        };
+
+        document.getElementById('answer').onkeypress = async function(e) {
+            if (e.keyCode !== 13) return;
+            const data = JSON.parse(this.value);
+            const peer = peers[data.id];
+            if (!peer) return;
+            this.disabled = true;
+            await peer.pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
+        };
+
+        chatInput.onkeypress = function(e) {
+            if (e.keyCode !== 13 || !username || connectedPeers === 0) return;
+            const msg = `${username}: ${this.value}`;
+            peers.forEach(peer => {
+                if (peer.dc.readyState === 'open') peer.dc.send(msg);
+            });
+            log(msg);
+            this.value = '';
+        };
+
+        updateStatus();
+    </script>
+</body>
+</html>
